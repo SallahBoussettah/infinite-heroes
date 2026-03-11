@@ -4,14 +4,16 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI } from '@google/genai';
 import jsPDF from 'jspdf';
-import { MAX_STORY_PAGES, BACK_COVER_PAGE, TOTAL_PAGES, INITIAL_PAGES, BATCH_SIZE, DECISION_PAGES, GENRES, TONES, LANGUAGES, ComicFace, Beat, Persona } from './types';
+import { MAX_STORY_PAGES, BACK_COVER_PAGE, TOTAL_PAGES, INITIAL_PAGES, BATCH_SIZE, DECISION_PAGES, GENRES, TONES, LANGUAGES, SETTINGS, THEMES, TIME_PERIODS, ART_STYLES, ComicFace, Beat, Persona, Series, IssueMetadata } from './types';
 import { Setup } from './components/Setup';
 import { Book } from './components/Book';
+import { SeriesManager } from './components/SeriesManager';
 import { useApiKey } from './hooks/useApiKey';
 import { ApiKeyDialog } from './components/ApiKeyDialog';
+import { seriesStorage } from './utils/seriesStorage';
 
 // --- Constants ---
 const MODEL_V3 = "gemini-3-pro-image-preview";
@@ -24,9 +26,22 @@ const App: React.FC = () => {
 
   const [hero, setHeroState] = useState<Persona | null>(null);
   const [friend, setFriendState] = useState<Persona | null>(null);
+
+  // Series & Issue Management
+  const [seriesName, setSeriesName] = useState("");
+  const [totalIssues, setTotalIssues] = useState(1);
+  const [currentSeries, setCurrentSeries] = useState<Series | null>(null);
+  const [issueCreationTimestamp, setIssueCreationTimestamp] = useState<number>(Date.now());
+
+  // Story Configuration
   const [selectedGenre, setSelectedGenre] = useState(GENRES[0]);
+  const [selectedSetting, setSelectedSetting] = useState(SETTINGS[0]);
+  const [selectedTheme, setSelectedTheme] = useState(THEMES[0]);
+  const [selectedTimePeriod, setSelectedTimePeriod] = useState(TIME_PERIODS[0]);
+  const [selectedArtStyle, setSelectedArtStyle] = useState(ART_STYLES[0]);
   const [selectedLanguage, setSelectedLanguage] = useState(LANGUAGES[0].code);
   const [customPremise, setCustomPremise] = useState("");
+  const [customSetting, setCustomSetting] = useState("");
   const [storyTone, setStoryTone] = useState(TONES[0]);
   const [richMode, setRichMode] = useState(true);
   
@@ -39,9 +54,10 @@ const App: React.FC = () => {
   const [comicFaces, setComicFaces] = useState<ComicFace[]>([]);
   const [currentSheetIndex, setCurrentSheetIndex] = useState(0);
   const [isStarted, setIsStarted] = useState(false);
-  
+
   // --- Transition States ---
-  const [showSetup, setShowSetup] = useState(true);
+  const [showSeriesManager, setShowSeriesManager] = useState(true);
+  const [showSetup, setShowSetup] = useState(false);
   const [isTransitioning, setIsTransitioning] = useState(false);
 
   const generatingPages = useRef(new Set<number>());
@@ -88,9 +104,26 @@ const App: React.FC = () => {
     const lastBeat = relevantHistory[relevantHistory.length - 1]?.narrative;
     const lastFocus = lastBeat?.focus_char || 'none';
 
-    const historyText = relevantHistory.map(p => 
+    const historyText = relevantHistory.map(p =>
       `[Page ${p.pageIndex}] [Focus: ${p.narrative?.focus_char}] (Caption: "${p.narrative?.caption || ''}") (Dialogue: "${p.narrative?.dialogue || ''}") (Scene: ${p.narrative?.scene}) ${p.resolvedChoice ? `-> USER CHOICE: "${p.resolvedChoice}"` : ''}`
     ).join('\n');
+
+    // Previous Issue Context
+    let previousIssueContext = "";
+    if (currentSeries && currentSeries.issues.length > 0) {
+      const seriesOverview = seriesStorage.generateSeriesOverview(currentSeries);
+      const currentIssueNum = currentSeries.currentIssueNumber;
+      const lastIssue = currentSeries.issues[currentSeries.issues.length - 1];
+
+      previousIssueContext = `
+SERIES CONTEXT: "${currentSeries.name}" - Issue #${currentIssueNum} of ${currentSeries.totalIssuesPlanned}
+PREVIOUS ISSUES OVERVIEW: ${seriesOverview}
+LAST ISSUE KEY EVENTS: ${lastIssue?.keyEvents.join(', ') || 'None'}
+LAST ISSUE CHARACTER STATES: Hero - ${lastIssue?.characterStates.heroState || 'Unknown'}, Co-Star - ${lastIssue?.characterStates.friendState || 'N/A'}
+UNRESOLVED FROM PREVIOUS: ${lastIssue?.unsolvedMysteries.join(', ') || 'None'}
+LAST CHOICE MADE: ${lastIssue?.lastChoice || 'None'}
+INSTRUCTION: Continue the ongoing story. Reference events from previous issues naturally. Build on established character development and relationships.`;
+    }
 
     // Aggressive Co-Star Injection Logic
     let friendInstruction = "Not yet introduced.";
@@ -105,11 +138,13 @@ const App: React.FC = () => {
     }
 
     // Determine Core Story Driver (Genre vs Custom Premise)
-    let coreDriver = `GENRE: ${selectedGenre}. TONE: ${storyTone}.`;
+    const effectiveSetting = selectedSetting === 'Custom' ? (customSetting || selectedSetting) : selectedSetting;
+
+    let coreDriver = `GENRE: ${selectedGenre}. SETTING: ${effectiveSetting}. THEME: ${selectedTheme}. TIME PERIOD: ${selectedTimePeriod}. TONE: ${storyTone}.`;
     if (selectedGenre === 'Custom') {
-        coreDriver = `STORY PREMISE: ${customPremise || "A totally unique, unpredictable adventure"}. (Follow this premise strictly over standard genre tropes).`;
+        coreDriver = `STORY PREMISE: ${customPremise || "A totally unique, unpredictable adventure"}. SETTING: ${effectiveSetting}. THEME: ${selectedTheme}. TIME PERIOD: ${selectedTimePeriod}. (Follow this premise strictly over standard genre tropes).`;
     }
-    
+
     const isSliceOfLife = selectedGenre.includes("Comedy") || selectedGenre.includes("Teen") || selectedGenre.includes("Slice");
 
     // Guardrails to prevent everything becoming "Quantum Sci-Fi"
@@ -151,6 +186,7 @@ const App: React.FC = () => {
 You are writing a comic book script. PAGE ${pageNum} of ${MAX_STORY_PAGES}.
 TARGET LANGUAGE FOR TEXT: ${langName} (CRITICAL: CAPTIONS, DIALOGUE, CHOICES MUST BE IN THIS LANGUAGE).
 ${coreDriver}
+${previousIssueContext}
 
 CHARACTERS:
 - HERO: Active.
@@ -205,20 +241,20 @@ OUTPUT STRICT JSON ONLY (No markdown formatting):
   };
 
   const generatePersona = async (desc: string): Promise<Persona> => {
-      const style = selectedGenre === 'Custom' ? "Modern American comic book art" : `${selectedGenre} comic`;
+      const style = `${selectedArtStyle} comic book art`;
       try {
           const ai = getAI();
           const res = await ai.models.generateContent({
               model: MODEL_IMAGE_GEN_NAME,
-              contents: { text: `STYLE: Masterpiece ${style} character sheet, detailed ink, neutral background. FULL BODY. Character: ${desc}` },
+              contents: { text: `STYLE: Masterpiece ${style} character sheet, detailed ink, neutral background. FULL BODY. Setting: ${selectedSetting}. Time period: ${selectedTimePeriod}. Character: ${desc}` },
               config: { imageConfig: { aspectRatio: '1:1' } }
           });
           const part = res.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
           if (part?.inlineData?.data) return { base64: part.inlineData.data, desc };
           throw new Error("Failed");
-      } catch (e) { 
+      } catch (e) {
         handleAPIError(e);
-        throw e; 
+        throw e;
       }
   };
 
@@ -233,18 +269,21 @@ OUTPUT STRICT JSON ONLY (No markdown formatting):
         contents.push({ inlineData: { mimeType: 'image/jpeg', data: friendRef.current.base64 } });
     }
 
-    const styleEra = selectedGenre === 'Custom' ? "Modern American" : selectedGenre;
-    let promptText = `STYLE: ${styleEra} comic book art, detailed ink, vibrant colors. `;
-    
+    const styleDesc = `${selectedArtStyle} comic book art, detailed ink`;
+    const effectiveSetting = selectedSetting === 'Custom' ? (customSetting || selectedSetting) : selectedSetting;
+
+    let promptText = `STYLE: ${styleDesc}. SETTING: ${effectiveSetting}. TIME PERIOD: ${selectedTimePeriod}. `;
+
     if (type === 'cover') {
         const langName = LANGUAGES.find(l => l.code === selectedLanguage)?.name || "English";
-        promptText += `TYPE: Comic Book Cover. TITLE: "INFINITE HEROES" (OR LOCALIZED TRANSLATION IN ${langName.toUpperCase()}). Main visual: Dynamic action shot of [HERO] (Use REFERENCE 1).`;
+        const issueNum = currentSeries ? currentSeries.currentIssueNumber : 1;
+        promptText += `TYPE: Comic Book Cover. TITLE: "${seriesName || 'INFINITE HEROES'}" (OR LOCALIZED TRANSLATION IN ${langName.toUpperCase()}). ISSUE #${issueNum}. Main visual: Dynamic action shot of [HERO] (Use REFERENCE 1).`;
     } else if (type === 'back_cover') {
-        promptText += `TYPE: Comic Back Cover. FULL PAGE VERTICAL ART. Dramatic teaser. Text: "NEXT ISSUE SOON".`;
+        promptText += `TYPE: Comic Back Cover. FULL PAGE VERTICAL ART. Dramatic teaser. Text: "TO BE CONTINUED" or "NEXT ISSUE".`;
     } else {
         promptText += `TYPE: Vertical comic panel. SCENE: ${beat.scene}. `;
         promptText += `INSTRUCTIONS: Maintain strict character likeness. If scene mentions 'HERO', you MUST use REFERENCE 1. If scene mentions 'CO-STAR' or 'SIDEKICK', you MUST use REFERENCE 2.`;
-        
+
         if (beat.caption) promptText += ` INCLUDE CAPTION BOX: "${beat.caption}"`;
         if (beat.dialogue) promptText += ` INCLUDE SPEECH BUBBLE: "${beat.dialogue}"`;
     }
@@ -336,21 +375,72 @@ OUTPUT STRICT JSON ONLY (No markdown formatting):
     // --- API KEY VALIDATION ---
     const hasKey = await validateApiKey();
     if (!hasKey) return; // Stop if cancelled or invalid
-    
+
     if (!heroRef.current) return;
+    if (!seriesName.trim()) {
+        alert("Please enter a series name.");
+        return;
+    }
     if (selectedGenre === 'Custom' && !customPremise.trim()) {
         alert("Please enter a custom story premise.");
         return;
     }
+    if (selectedSetting === 'Custom' && !customSetting.trim()) {
+        alert("Please describe your custom setting.");
+        return;
+    }
+
     setIsTransitioning(true);
-    
+
+    // Create or load series
+    let series: Series;
+
+    if (currentSeries && currentSeries.currentIssueNumber <= currentSeries.totalIssuesPlanned) {
+      // Continue existing series (user clicked "Continue" from SeriesManager)
+      series = currentSeries;
+      // Update series with any changes made in setup (in case user modified settings)
+      series.hero = heroRef.current!;
+      series.friend = friendRef.current;
+      series.genre = selectedGenre;
+      series.setting = selectedSetting === 'Custom' ? customSetting : selectedSetting;
+      series.theme = selectedTheme;
+      series.timePeriod = selectedTimePeriod;
+      series.artStyle = selectedArtStyle;
+      series.language = selectedLanguage;
+      series.richMode = richMode;
+      series.customPremise = customPremise;
+      seriesStorage.saveSeries(series);
+    } else {
+      // Create new series
+      series = seriesStorage.createSeries(
+        seriesName,
+        heroRef.current,
+        friendRef.current,
+        selectedGenre,
+        selectedSetting === 'Custom' ? customSetting : selectedSetting,
+        selectedTheme,
+        selectedTimePeriod,
+        selectedArtStyle,
+        selectedLanguage,
+        richMode,
+        totalIssues,
+        customPremise
+      );
+      seriesStorage.saveSeries(series);
+      seriesStorage.setCurrentSeriesId(series.id);
+      setCurrentSeries(series);
+    }
+
+    // Set timestamp for this issue
+    setIssueCreationTimestamp(Date.now());
+
     let availableTones = TONES;
     if (selectedGenre === "Teen Drama / Slice of Life" || selectedGenre === "Lighthearted Comedy") {
         availableTones = TONES.filter(t => t.includes("CASUAL") || t.includes("WHOLESOME") || t.includes("QUIPPY"));
     } else if (selectedGenre === "Classic Horror") {
         availableTones = TONES.filter(t => t.includes("INNER-MONOLOGUE") || t.includes("OPERATIC"));
     }
-    
+
     setStoryTone(availableTones[Math.floor(Math.random() * availableTones.length)]);
 
     const coverFace: ComicFace = { id: 'cover', type: 'cover', choices: [], isLoading: true, pageIndex: 0 };
@@ -359,7 +449,7 @@ OUTPUT STRICT JSON ONLY (No markdown formatting):
     generatingPages.current.add(0);
 
     generateSinglePage('cover', 0, 'cover').finally(() => generatingPages.current.delete(0));
-    
+
     setTimeout(async () => {
         setIsStarted(true);
         setShowSetup(false);
@@ -379,13 +469,61 @@ OUTPUT STRICT JSON ONLY (No markdown formatting):
 
   const resetApp = () => {
       setIsStarted(false);
-      setShowSetup(true);
+      setShowSetup(false);
+      setShowSeriesManager(true);
       setComicFaces([]);
       setCurrentSheetIndex(0);
       historyRef.current = [];
       generatingPages.current.clear();
-      setHero(null);
-      setFriend(null);
+  };
+
+  const handleContinueSeries = (series: Series) => {
+    // Load series data into state
+    setCurrentSeries(series);
+    setSeriesName(series.name);
+    setTotalIssues(series.totalIssuesPlanned);
+    setHero(series.hero);
+    setFriend(series.friend || null);
+    setSelectedGenre(series.genre);
+    setSelectedSetting(series.setting);
+    setSelectedTheme(series.theme);
+    setSelectedTimePeriod(series.timePeriod);
+    setSelectedArtStyle(series.artStyle);
+    setSelectedLanguage(series.language);
+    setRichMode(series.richMode);
+    setCustomPremise(series.customPremise || "");
+
+    // Set as current series
+    seriesStorage.setCurrentSeriesId(series.id);
+
+    // Show setup (but with series data pre-loaded)
+    setShowSeriesManager(false);
+    setShowSetup(true);
+  };
+
+  const handleStartNewSeries = () => {
+    // Clear current series
+    setCurrentSeries(null);
+    seriesStorage.setCurrentSeriesId(null);
+
+    // Reset all fields
+    setSeriesName("");
+    setTotalIssues(1);
+    setHero(null);
+    setFriend(null);
+    setSelectedGenre(GENRES[0]);
+    setSelectedSetting(SETTINGS[0]);
+    setSelectedTheme(THEMES[0]);
+    setSelectedTimePeriod(TIME_PERIODS[0]);
+    setSelectedArtStyle(ART_STYLES[0]);
+    setSelectedLanguage(LANGUAGES[0].code);
+    setCustomPremise("");
+    setCustomSetting("");
+    setRichMode(true);
+
+    // Show setup
+    setShowSeriesManager(false);
+    setShowSetup(true);
   };
 
   const downloadPDF = () => {
@@ -398,7 +536,28 @@ OUTPUT STRICT JSON ONLY (No markdown formatting):
         if (index > 0) doc.addPage([PAGE_WIDTH, PAGE_HEIGHT], 'portrait');
         if (face.imageUrl) doc.addImage(face.imageUrl, 'JPEG', 0, 0, PAGE_WIDTH, PAGE_HEIGHT);
     });
-    doc.save('Infinite-Heroes-Issue.pdf');
+
+    const issueNum = currentSeries ? currentSeries.currentIssueNumber : 1;
+    const filename = `${seriesName || 'Infinite-Heroes'}-Issue-${issueNum}.pdf`;
+    doc.save(filename);
+
+    // Save issue metadata to series
+    if (currentSeries) {
+      const issueMetadata = seriesStorage.extractIssueMetadata(
+        currentSeries.id,
+        currentSeries.currentIssueNumber,
+        comicFaces,
+        issueCreationTimestamp
+      );
+
+      seriesStorage.addIssueToSeries(currentSeries.id, issueMetadata);
+
+      // Update current series reference
+      const updatedSeries = seriesStorage.getSeries(currentSeries.id);
+      if (updatedSeries) {
+        setCurrentSeries(updatedSeries);
+      }
+    }
   };
 
   const handleHeroUpload = async (file: File) => {
@@ -418,23 +577,48 @@ OUTPUT STRICT JSON ONLY (No markdown formatting):
   return (
     <div className="comic-scene">
       {showApiKeyDialog && <ApiKeyDialog onContinue={handleApiKeyDialogContinue} />}
-      
-      <Setup 
+
+      {showSeriesManager && (
+        <SeriesManager
+          onContinueSeries={handleContinueSeries}
+          onStartNew={handleStartNewSeries}
+        />
+      )}
+
+      <Setup
           show={showSetup}
           isTransitioning={isTransitioning}
           hero={hero}
           friend={friend}
+          seriesName={seriesName}
+          totalIssues={totalIssues}
           selectedGenre={selectedGenre}
+          selectedSetting={selectedSetting}
+          selectedTheme={selectedTheme}
+          selectedTimePeriod={selectedTimePeriod}
+          selectedArtStyle={selectedArtStyle}
           selectedLanguage={selectedLanguage}
           customPremise={customPremise}
+          customSetting={customSetting}
           richMode={richMode}
           onHeroUpload={handleHeroUpload}
           onFriendUpload={handleFriendUpload}
+          onSeriesNameChange={setSeriesName}
+          onTotalIssuesChange={setTotalIssues}
           onGenreChange={setSelectedGenre}
+          onSettingChange={setSelectedSetting}
+          onThemeChange={setSelectedTheme}
+          onTimePeriodChange={setSelectedTimePeriod}
+          onArtStyleChange={setSelectedArtStyle}
           onLanguageChange={setSelectedLanguage}
           onPremiseChange={setCustomPremise}
+          onCustomSettingChange={setCustomSetting}
           onRichModeChange={setRichMode}
           onLaunch={launchStory}
+          onBackToSeries={() => {
+            setShowSetup(false);
+            setShowSeriesManager(true);
+          }}
       />
       
       <Book 

@@ -21,9 +21,67 @@ export const TONES = [
     "WHOLESOME (Warm, gentle, optimistic.)"
 ];
 
+export const SETTINGS = [
+    "Modern City",
+    "Fantasy Realm",
+    "Space/Sci-Fi",
+    "Post-Apocalyptic",
+    "Medieval Kingdom",
+    "Cyberpunk",
+    "Small Town",
+    "Underwater",
+    "Desert Wasteland",
+    "Haunted Mansion",
+    "School/Academy",
+    "Custom"
+];
+
+export const THEMES = [
+    "Revenge",
+    "Redemption",
+    "Friendship",
+    "Betrayal",
+    "Love",
+    "Sacrifice",
+    "Coming of Age",
+    "Power & Corruption",
+    "Survival",
+    "Justice",
+    "Family",
+    "Identity",
+    "Freedom",
+    "Hope vs Despair"
+];
+
+export const TIME_PERIODS = [
+    "Present Day",
+    "Near Future (2050s)",
+    "Far Future (Beyond 2100)",
+    "1980s-1990s",
+    "1950s-1960s",
+    "1920s-1930s",
+    "Medieval Era",
+    "Ancient Times",
+    "Victorian Era",
+    "Wild West",
+    "Timeless/Fantasy"
+];
+
+export const ART_STYLES = [
+    "Classic American Comic",
+    "Manga/Anime",
+    "Noir/Black & White",
+    "Watercolor",
+    "Cartoon/Animated",
+    "Realistic",
+    "Grunge/Gritty",
+    "Minimalist",
+    "Retro/Vintage"
+];
+
 export const LANGUAGES = [
     { code: 'en-US', name: 'English (US)' },
-    { code: 'ar-EG', name: 'Arabic (Egypt)' },
+    { code: 'ar', name: 'Arabic' },
     { code: 'de-DE', name: 'German (Germany)' },
     { code: 'es-MX', name: 'Spanish (Mexico)' },
     { code: 'fr-FR', name: 'French (France)' },
@@ -62,4 +120,47 @@ export interface Beat {
 export interface Persona {
   base64: string;
   desc: string;
+}
+
+export interface IssueMetadata {
+  issueNumber: number;
+  seriesId: string;
+  createdAt: number;
+  completedAt?: number;
+  totalPages: number;
+  keyEvents: string[]; // Major plot points from this issue
+  characterStates: {
+    heroState: string; // How the hero ended this issue
+    friendState?: string; // How the co-star ended this issue
+    relationships: string; // Relationship dynamics
+  };
+  unsolvedMysteries: string[]; // Cliffhangers and open questions
+  lastChoice?: string; // User's final decision in this issue
+}
+
+export interface Series {
+  id: string;
+  name: string;
+  hero: Persona;
+  friend?: Persona;
+  genre: string;
+  setting: string;
+  theme: string;
+  timePeriod: string;
+  artStyle: string;
+  language: string;
+  richMode: boolean;
+  customPremise?: string;
+  totalIssuesPlanned: number;
+  issues: IssueMetadata[];
+  currentIssueNumber: number;
+  createdAt: number;
+  lastModified: number;
+}
+
+export interface StoryContext {
+  previousIssues: IssueMetadata[];
+  currentIssueNumber: number;
+  totalIssuesPlanned: number;
+  seriesOverview: string; // Summary of story so far
 }
